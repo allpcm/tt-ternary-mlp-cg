@@ -82,11 +82,24 @@ module tt_um_pcm_ternary_mlp_cg (
     wire wmem_en = w_shift | ~rst_n;
     wire wmem_clk;
 
-    pcm_clkgate u_wmem_cg (
-        .clk (clk),
-        .en  (wmem_en),
-        .gclk(wmem_clk)
+`ifdef SIM
+    // Behavioural equivalent of a latch_posedge ICG, for RTL simulation only:
+    // GATE is sampled while CLK is low, so the enable may move during the high
+    // phase without chopping the clock.
+    reg wmem_en_latched;
+    always @(*)
+        if (!clk) wmem_en_latched = wmem_en;
+    assign wmem_clk = clk & wmem_en_latched;
+`else
+    // Instantiated flat, in the top module, with no power pins. v1 wrapped
+    // this in a pcm_clkgate submodule and LibreLane's SetPowerConnections
+    // step then tried to bind the cell's VPB pin to uio_oe and quit.
+    sky130_fd_sc_hd__dlclkp_1 u_wmem_icg (
+        .CLK (clk),
+        .GATE(wmem_en),
+        .GCLK(wmem_clk)
     );
+`endif
 
     // No enable term here: the clock gate carries it. That is the whole point
     // of the change -- these 320 flops lose their feedback muxes and stop
@@ -262,39 +275,3 @@ module tt_um_pcm_ternary_mlp_cg (
 endmodule
 
 `default_nettype wire
-
-
-/* ------------------------------------------------------------------------
- * pcm_clkgate -- integrated clock gating cell wrapper.
- *
- * Synthesis and gate-level use the real sky130 ICG (latch_posedge: GATE is
- * sampled while CLK is low, so the enable may change during the high phase
- * without chopping the clock). RTL simulation uses a behavioural equivalent,
- * because the PDK cell models are not compiled in that flow.
- *
- * -DSIM is added to the RTL branch of test/Makefile for exactly this.
- * ------------------------------------------------------------------------ */
-module pcm_clkgate (
-    input  wire clk,
-    input  wire en,
-    output wire gclk
-);
-`ifdef SIM
-    reg en_latched;
-    always @(*)
-        if (!clk) en_latched = en;
-    assign gclk = clk & en_latched;
-`else
-    sky130_fd_sc_hd__dlclkp_1 u_icg (
-`ifdef USE_POWER_PINS
-        .VPWR(1'b1),
-        .VGND(1'b0),
-        .VPB (1'b1),
-        .VNB (1'b0),
-`endif
-        .CLK (clk),
-        .GATE(en),
-        .GCLK(gclk)
-    );
-`endif
-endmodule
